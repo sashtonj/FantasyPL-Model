@@ -8,6 +8,7 @@ MANAGER_ID = "6082478"
 BASE_URL = "https://fantasy.premierleague.com/api/"
 BASIC_DATA_URL = "bootstrap-static/"
 FIXTURES_URL = "fixtures/"
+
 REFRESH = False
 HORIZON_LENGTH = 3
 PAST_GAMEWEEKS = 3
