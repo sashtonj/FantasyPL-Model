@@ -83,15 +83,19 @@ for f in fixture_data:
 
 # Create player instances
 for p in basic_data['elements']:
-    chance_of_playing = 1 if p['chance_of_playing_next_round'] is None else round(
-        p['chance_of_playing_next_round'] / 100, 1)
-    player = Player(p['id'], p['first_name'], p['second_name'], p['team'], Role(p['element_type']),
-                    p['now_cost'], {}, float(p['form']), float(p['points_per_game']),
-                    float(p['selected_by_percent']), p['total_points'], chance_of_playing)
-    pl.get_club(p['team']).add_player(player)
+    player = Player(p['id'], p['first_name'], p['second_name'], p['team'], Role(p['element_type']))
+    player.cost = p['now_cost']
+    player.form = p['form']
+    player.points_per_game = p['points_per_game']
+    player.selected_by_percent = p['selected_by_percent']
+    player.total_points = p['total_points']
+    player.chance_of_playing = p['chance_of_playing_next_round']
 
     for f in player_data[p['id']]['history']:
-        player.add_gameweek_stats(f['round'], f['fixture'], f['total_points'], f['minutes'])
+        player.add_gameweek_stat(f['round'], 'points', f['total_points'])
+        player.add_gameweek_stat(f['round'], 'minutes', f['minutes'])
+
+    pl.get_club(p['team']).add_player(player)
 
 team = FantasyTeam()
 players = pl.get_players()
@@ -116,5 +120,4 @@ model.solve(HORIZON_LENGTH, PAST_GAMEWEEKS)
 
 for gw in range(pl.current_gw, pl.current_gw + model.horizon_len):
     print(f"\n------------\nGameweek: {gw}\n------------")
-    team.display_transfers(gw)
-    team.display_squad(gw)
+    team.display_gameweek(gw)

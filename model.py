@@ -251,8 +251,8 @@ class FantasyModel:
         difficulty_multiplier = 0.15
 
         for g in range(self.pl.current_gw - self.history_len, self.pl.current_gw + 1):
-            for f in player.gameweek_stats.get(g, []):
-                points += f['points'] * (1 - (fixture_multiplier * (self.pl.current_gw - g)))
+            for gw_points in player.points.get(g, []):
+                points += gw_points * (1 - (fixture_multiplier * (self.pl.current_gw - g)))
                 games += 1
 
         points = points / games
