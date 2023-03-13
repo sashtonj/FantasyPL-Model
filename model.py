@@ -3,8 +3,6 @@ from premierleague import PremierLeague
 from premierleague.role import Role
 from fantasyteam import FantasyTeam
 
-MANAGER_ID = "6082478"
-
 
 class FantasyModel:
 
