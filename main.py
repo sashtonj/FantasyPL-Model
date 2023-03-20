@@ -10,8 +10,8 @@ BASIC_DATA_URL = "bootstrap-static/"
 FIXTURES_URL = "fixtures/"
 
 REFRESH = False
-HORIZON_LENGTH = 3
-PAST_GAMEWEEKS = 3
+HORIZON_LENGTH = 10
+PAST_GAMEWEEKS = 10
 
 
 def get_player_summary_url(player_id: int) -> str:
@@ -39,11 +39,10 @@ def load_data(filepath: str, url: str, refresh: bool = False) -> dict:
     # Read from JSON file
     return utils.read_from_json_file(filepath)
 
+
 # --------------------
 # Load Data
 # --------------------
-
-
 basic_data = load_data('data/basic.json', BASE_URL + BASIC_DATA_URL, refresh=REFRESH)
 fixture_data = load_data('data/fixtures.json', BASE_URL + FIXTURES_URL, refresh=REFRESH)
 transfer_data = load_data('data/my_transfers.json', BASE_URL + get_my_transfers_url(MANAGER_ID), refresh=REFRESH)
@@ -58,6 +57,7 @@ current_gw = 0
 for gw in basic_data['events']:
     if gw['is_current']:
         current_gw = gw['id']
+        break
 
 my_team_data = load_data('data/my_team.json', BASE_URL + get_my_team_url(MANAGER_ID, current_gw), refresh=REFRESH)
 
@@ -73,6 +73,7 @@ for c in basic_data['teams']:
     club = Club(c['id'], c['name'], c['short_name'], players={}, fixtures={})
     pl.add_club(club)
 
+# Attach fixtures to club instances
 for f in fixture_data:
     if f['event'] is None:
         continue
@@ -97,6 +98,10 @@ for p in basic_data['elements']:
 
     pl.get_club(p['team']).add_player(player)
 
+# --------------------
+# Populate fantasy team instance with current squad, bank, and transfer information
+# --------------------
+
 team = FantasyTeam()
 players = pl.get_players()
 team.bank = my_team_data['entry_history']['bank']
@@ -105,6 +110,7 @@ for p in my_team_data['picks']:
     team.players.setdefault(pl.current_gw, {})[p['element']] = players.get(p['element'])
 
     if p['position'] < 12:
+        # < 12 indicates played was in the starting eleven
         team.starting.setdefault(pl.current_gw, []).append(p['element'])
     else:
         team.bench.setdefault(pl.current_gw, []).append(p['element'])
@@ -114,10 +120,19 @@ for p in my_team_data['picks']:
     elif p['is_vice_captain']:
         team.vice_captain[pl.current_gw] = players[p['element']]
 
+for t in transfer_data:
+    if t['event'] == pl.current_gw:
+        # We use t['event'] to only save transfers from the current gameweek
+        team.transfers_in.setdefault(pl.current_gw, []).append(players[t['element_in']])
+        team.transfers_out.setdefault(pl.current_gw, []).append(players[t['element_out']])
+
 
 model = FantasyModel(pl, team)
 model.solve(HORIZON_LENGTH, PAST_GAMEWEEKS)
 
-for gw in range(pl.current_gw, pl.current_gw + model.horizon_len):
-    print(f"\n------------\nGameweek: {gw}\n------------")
-    team.display_gameweek(gw)
+if model.status == 'Infeasible':
+    print("Problem is infeasible")
+else:
+    for gw in range(pl.current_gw, pl.current_gw + model.horizon_len + 1):
+        print(f"\n------------\nGameweek: {gw}\n------------")
+        team.display_gameweek(gw)

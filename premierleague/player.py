@@ -38,10 +38,3 @@ class Player:
 
     def add_gameweek_stat(self, gw: int, stat: str, value: int | float | None) -> None:
         getattr(self, stat).setdefault(gw, []).append(value)
-
-    def add_gameweek_stats(self, gw: int, fixture: int, points: int, minutes: int) -> None:
-        self.gameweek_stats.setdefault(gw, []).append({
-            "fixture": fixture,
-            "points": points,
-            "minutes": minutes
-        })
