@@ -5,20 +5,15 @@ from premierleague.role import Role
 from fantasyteam import FantasyTeam
 
 
-class FantasyModel:
+class Model:
 
     def __init__(self, pl: PremierLeague, team: FantasyTeam) -> None:
         self.pl = pl
         self.team = team
         self.model = LpProblem(name='fantasypl', sense=LpMaximize)
+        self.gameweek = self.pl.current_gw
 
-    def solve(self, horizon_len: int, history_len: int, max_gw: int = 38) -> None:
-        self.horizon_len = horizon_len
-        self.history_len = history_len
-
-        if self.pl.current_gw + self.horizon_len > max_gw:
-            sys.exit(f"Horizon length of {self.horizon_len} exceed maximum gameweek of {max_gw}")
-
+    def solve(self, horizon: int = 10) -> dict[int, FantasyTeam]:
         # ----------------------------------------
         # Sets & Subsets
         # ---------------------------------------
@@ -29,7 +24,7 @@ class FantasyModel:
         C = self.pl.clubs.values()
 
         # Set of gameweeks
-        G = range(self.pl.current_gw, self.pl.current_gw + self.horizon_len + 1)
+        G = range(self.gameweek, self.gameweek + horizon + 1)
 
         # Set of roles (player positions)
         R = list(Role)
@@ -54,7 +49,14 @@ class FantasyModel:
         u_r = {Role.GK: 1, Role.DF: 5, Role.MF: 5, Role.FW: 3}
 
         # Balance remaining
-        b_r = self.team.bank
+        b_r = 1000
+
+        # Did we make a transfer this week
+        t = 0
+        if self.gameweek < 2:
+            t = 1
+        elif len(self.team.transfers_in) > 0:
+            t = 1
 
         # ----------------------------------------
         # Decision Variables
@@ -69,58 +71,49 @@ class FantasyModel:
         # Player p has been selected in gameweek g (Derived from x and y)
         z = LpVariable.dicts("Selected", ((p.id, g) for p in P for g in G), cat=LpBinary)
 
-        # Player p has been transferred in during gameweek g
-        t_in = LpVariable.dicts("Transferred_in", ((p.id, g) for p in P for g in G), cat=LpBinary)
-
-        # Player p has been transferred in during gameweek g
-        t_out = LpVariable.dicts("Transferred_out", ((p.id, g) for p in P for g in G), cat=LpBinary)
-
-        # Indicates that zero transfers were conducted during gameweek g: {0: transfers, 1: zero transfers}
-        zero_t = LpVariable.dicts("Max_transfers", (g for g in G), cat=LpBinary)
-
         # Player p is club captain during gameweek g
         cc = LpVariable.dicts("Captain", ((p.id, g) for p in P for g in G), cat=LpBinary)
 
         # Player p is vice captain during gameweek g
         vc = LpVariable.dicts("Vice_captain", ((p.id, g) for p in P for g in G), cat=LpBinary)
 
-        # Our budget for each week
-        b = LpVariable.dicts("Budget", (g for g in G), cat=LpInteger)
+        # Player p has been transferred in during gameweek g
+        t_in = LpVariable.dicts("Transferred_in", ((p.id, g) for p in P for g in G), cat=LpBinary)
 
-        # ----------------------------------------
-        # Constraints
-        # --------------------------------------
+        # Player p has been transferred in during gameweek g
+        t_out = LpVariable.dicts("Transferred_out", ((p.id, g) for p in P for g in G), cat=LpBinary)
+
+        b = LpVariable.dicts("Bank", (g for g in G), cat=LpInteger)
+
+        # wc = LpVariable.dicts("Wildcard", (g for g in G), cat=LpInteger)
+
         for g in G:
 
-            if g == self.pl.current_gw:
-                # Current gameweek => set initial budgets, squad, and transfers etc.
-
-                # Set initial budget
-                b[g].setInitialValue(b_r)
-                b[g].fixValue()
-
+            if g == self.gameweek:
                 # Set initial squad
-                for p in self.team.players[g].values():
-                    z[(p.id, g)].setInitialValue(1)
-                    z[(p.id, g)].fixValue()
+                for p in self.team.starting:
+                    x[(p, g)].setInitialValue(1)
+                    x[(p, g)].fixValue()
+
+                for p in self.team.bench:
+                    y[(p, g)].setInitialValue(1)
+                    y[(p, g)].fixValue()
 
                 # Set current Captain
-                cc[(self.team.captain[g].id, g)].setInitialValue(1)
-                cc[(self.team.captain[g].id, g)].fixValue
+                cc[(self.team.captain, g)].setInitialValue(1)
+                cc[(self.team.captain, g)].fixValue()
 
                 # Set current vice Captain
-                vc[(self.team.vice_captain[g].id, g)].setInitialValue(1)
-                vc[(self.team.vice_captain[g].id, g)].fixValue
+                vc[(self.team.vice_captain, g)].setInitialValue(1)
+                vc[(self.team.vice_captain, g)].fixValue()
 
-                for p in self.team.transfers_in.get(g, []):
-                    t_in[(p.id, g)].setInitialValue(1)
-                    t_in[(p.id, g)].fixValue()
+                # Set current bank
+                b[g].setInitialValue(self.team.bank)
+                b[g].fixValue()
 
-                for p in self.team.transfers_out.get(g, []):
-                    t_out[(p.id, g)].setInitialValue(1)
-                    t_out[(p.id, g)].fixValue()
-
-                continue
+            # Starting 11 must have 11 players
+            name = f"GW {g}: Starting 11 must have 11 players..."
+            self.model += lpSum([x[(p.id, g)] for p in P]) == 11, name
 
             name = f"GW {g}: Must have a captain selected"
             self.model += lpSum([cc[(p.id, g)] for p in P]) == 1, name
@@ -128,46 +121,25 @@ class FantasyModel:
             name = f"GW {g}: Must have a vice captain selected"
             self.model += lpSum([vc[(p.id, g)] for p in P]) == 1, name
 
-            name = f"GW {g}: Squad value must be within our budget"
-            self.model += lpSum([z[(p.id, g)] * p.cost for p in P]) <= self.team.squad_value, name
+            if g > self.gameweek:
+                name = f"GW {g}: Maximum of 2 free transfers in to the team during each gameweek"
+                self.model += lpSum([t_in[(p.id, g)] for p in P]) <= 2 - t + (wc[g] * 13) + (wc[g] * t), name
 
-            name = f"GW {g}: Calculate whether any transfers occurred in the previous gameweek"
-            self.model += lpSum([t_in[(p.id, g - 1)] for p in P]) <= 2 * (1 - zero_t[g]), name
+                name = f"GW {g}: Maximum of 2 free transfers out of the team during each gameweek"
+                self.model += lpSum([t_out[(p.id, g)] for p in P]) <= 2 - t, name
 
-            # name = f"GW {g}: The max number of transfers out for this gw based on the transfers from last week"
-            # self.model += lpSum([t_out[(p.id, g - 1)] for p in P]) <= 2 * (1 - zero_t[g]), name
+                name = f"GW {g}: Number of transfers in must match the number of transfers out"
+                self.model += lpSum([t_in[(p.id, g)] for p in P]) == lpSum([t_out[(p.id, g)] for p in P]), name
 
-            name = f"GW {g}: Maximum of 2 free transfers in to the team during each gameweek"
-            self.model += lpSum([t_in[(p.id, g)] for p in P]) <= 1 + zero_t[g], name
+                name = f"GW {g}: Squad value must be within budget"
+                self.model += lpSum([z[(p.id, g)] * p.cost for p in P]) <= b_r, name
 
-            name = f"GW {g}: Maximum of 2 free transfers out of the team during each gameweek"
-            self.model += lpSum([t_out[(p.id, g)] for p in P]) <= 1 + zero_t[g], name
+                # name = f"GW {g}: Bank balance equals previous bank +/- transfer costs"
+                # self.model += b[g - 1] + lpSum([t_out[(p.id, g)] * p.cost - t_in[(p.id, g)] * p.cost]
+                #                                for p in P) == b[g], name
 
-            name = f"GW {g}: Number of transfers in must match the number of transfers out"
-            self.model += lpSum([t_in[(p.id, g)] for p in P]) == lpSum([t_out[(p.id, g)] for p in P]), name
-
-            name = f"GW {g}: Starting 11 must have 11 players..."
-            self.model += lpSum([x[(p.id, g)] for p in P]) == 11, name
-
-            for p in P:
-                name = f"GW {g}: Player {p.id} is in the squad of 15"
-                self.model += x[(p.id, g)] + y[(p.id, g)] == z[(p.id, g)], name
-
-                name = f"GW {g}: Player {p.id} cannot be captain and vice captain during the same gameweek"
-                self.model += cc[(p.id, g)] + vc[(p.id, g)] <= 1, name
-
-                name = f"GW {g}: If player {p.id} is captain, he must be in the starting 11"
-                self.model += x[(p.id, g)] >= cc[(p.id, g)], name
-
-                name = f"GW {g}: If player {p.id} is vice captain, he must be in the starting 11"
-                self.model += x[(p.id, g)] >= vc[(p.id, g)], name
-
-                name = f"GW {g}: Player {p.id} cannot be transferred in and out in the same gameweek"
-                self.model += t_in[(p.id, g)] + t_out[(p.id, g)] <= 1, name
-
-                # Track when a player is transferred in or out based on the previous gameweek's selection
-                name = f"GW {g}: Track player {p.id}'s transfers"
-                self.model += z[(p.id, g)] - z[(p.id, g - 1)] + t_out[(p.id, g)] == t_in[(p.id, g)], name
+                # name = f"GW {g}: Bank balance remaining must always be greater than or equal to 0"
+                # self.model += b[g] >= 0, name
 
             for r in R:
                 # Constraint on the number of players from each position required
@@ -183,8 +155,35 @@ class FantasyModel:
                 self.model += lpSum([x[(p.id, g)]] for p in P_r[r]) <= u_r[r], name
 
             for c in C:
+                # Maximum of 3 players from each club
                 name = f"GW {g}: Max 3 players from club {c}"
                 self.model += lpSum([z[(p.id, g)]] for p in P if p.club_id == c.id) <= 3, name
+
+            for p in P:
+                # Squad must be made up of starting 11 and 4 on the bench
+                name = f"GW {g}: Player {p.id} is in the squad of 15"
+                self.model += x[(p.id, g)] + y[(p.id, g)] == z[(p.id, g)], name
+
+                name = f"GW {g}: Player {p.id} cannot be captain and vice captain during the same gameweek"
+                self.model += cc[(p.id, g)] + vc[(p.id, g)] <= 1, name
+
+                name = f"GW {g}: If player {p.id} is captain, he must be in the starting 11"
+                self.model += x[(p.id, g)] >= cc[(p.id, g)], name
+
+                name = f"GW {g}: If player {p.id} is vice captain, he must be in the starting 11"
+                self.model += x[(p.id, g)] >= vc[(p.id, g)], name
+
+                if g > self.gameweek:
+                    # Track when a player is transferred in or out based on the previous gameweek's selection
+                    name = f"GW {g}: Track player {p.id}'s transfers"
+                    self.model += z[(p.id, g)] - z[(p.id, g - 1)] + t_out[(p.id, g)] == t_in[(p.id, g)], name
+
+                if g == 0:
+                    name = f"GW {g}: Player {p.id} in initial squad must be transferred in"
+                    self.model += t_in[(p.id, g)] == z[(p.id, g)], name
+
+                    t_out[(p.id, g)].setInitialValue(0)
+                    t_out[(p.id, g)].fixValue()
 
         # ----------------------------------------
         # Objective Function
@@ -193,68 +192,45 @@ class FantasyModel:
         points = lpSum([x[(p.id, g)] * self.calculate_score(p, g) for p in P for g in G])
         bench = 0.1 * lpSum([y[(p.id, g)] * self.calculate_score(p, g) for p in P for g in G])
         captain = lpSum([cc[(p.id, g)] * self.calculate_score(p, g) for p in P for g in G])
+        vice_captain = 0.5 * lpSum([vc[(p.id, g)] * self.calculate_score(p, g) for p in P for g in G])
 
-        self.model += points + bench + captain
+        self.model += points + bench + captain + vice_captain
 
         self.model.solve()
         self.status = LpStatus[self.model.status]
         self.objective_value = lpValue(self.model.objective)
-
         # ----------------------------------------
         # Store results in fantasy team instance
         # --------------------------------------
 
-        for g in range(self.pl.current_gw + 1, self.pl.current_gw + self.horizon_len + 1):
-
-            for p in self.pl.get_players().values():
+        teams = {}
+        teams[self.gameweek] = self.team
+        for g in G[1:]:
+            team = FantasyTeam(g)
+            team.bank = lpValue(b[g])
+            for p in P:
                 if lpValue(cc[(p.id, g)]):
-                    self.team.captain[g] = p
+                    team.captain = p
 
                 if lpValue(vc[(p.id, g)]):
-                    self.team.vice_captain[g] = P
+                    team.vice_captain = p
 
                 if lpValue(t_in[(p.id, g)]):
-                    self.team.transfers_in.setdefault(g, []).append(p)
+                    team.transfers_in.append(p)
 
                 if lpValue(t_out[(p.id, g)]):
-                    self.team.transfers_out.setdefault(g, []).append(p)
+                    team.transfers_out.append(p)
 
                 if lpValue(x[(p.id, g)]):
-                    self.team.starting.setdefault(g, []).append(p.id)
-                    self.team.players.setdefault(g, {})[p.id] = p
+                    team.starting.append(p.id)
+                    team.players[p.id] = p
 
                 if lpValue(y[(p.id, g)]):
-                    self.team.bench.setdefault(g, []).append(p.id)
-                    self.team.players.setdefault(g, {})[p.id] = p
+                    team.bench.append(p.id)
+                    team.players[p.id] = p
+
+            teams[g] = team
+        return teams
 
     def calculate_score(self, player, gw) -> float:
-        """
-        Used to calculate how many points we expect a player to earn during each gameweek
-        """
-        club = self.pl.get_club(player.club_id)
-        points = 0
-        games = 0
-
-        fixture_multiplier = 0.05
-        home_adv = 0.1
-        difficulty_multiplier = 0.15
-
-        for g in range(self.pl.current_gw - self.history_len, self.pl.current_gw + 1):
-            for gw_points in player.points.get(g, []):
-                points += gw_points * (1 - (fixture_multiplier * (self.pl.current_gw - g)))
-                games += 1
-
-        points = points / games
-        this_gw = 0
-        for f in club.fixtures.get(gw, []):
-            at_home = f.home_team == club.id
-            difficulty = f.home_team_difficulty if at_home else f.away_team_difficulty
-            this_gw += 1 - (difficulty_multiplier * difficulty)
-            this_gw += home_adv if at_home else 0
-
-        score = round(player.chance_of_playing * points * this_gw, 2)
-        if len(player.points.get(gw, [])) == 0:
-            # This is the first time we've calculated for this player => Store in the player's instance
-            player.add_gameweek_stat(gw, 'points', score)
-
-        return score
+        return float(player.selected_by_percent) * player.chance_of_playing

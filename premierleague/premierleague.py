@@ -7,7 +7,7 @@ class PremierLeague:
 
     def __init__(self) -> None:
         self.clubs = {}
-        self.current_gw = 1
+        self.current_gw = 0
 
     def add_club(self, club: Club) -> None:
         self.clubs[club.id] = club
